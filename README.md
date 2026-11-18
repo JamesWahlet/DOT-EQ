@@ -1,1 +1,8 @@
-Bitte mach den ein und Ausschalter weiß im hellen und schwarz im Dunklen Modus, und behalte den Glow wenn man es anschaltet und ohne wenn man es ausschaltet. Bitte entferne die 90 grad Winkel in der ki Seite und der qr Code Scanner Seite, ich fande die qr Code Scanner mit Camera vorher vom Design besser, du sollst es mehr so gelb umranden und Glowen lassen wenn aktiviert, und entferne die roten Punkte vor den wörtern.
+FUNKTIONEN IM ÜBERBLICK 
+10-Band & Simple Equalizer Touch-interaktive Kurve, Preamp & Echtzeit-Visualizer.
+3-Wege Crossover Bass, Mitten & Höhen einzeln schalten mit variablen Grenzfrequenzen.
+Ultra Bass & Dynamik Beat-erkennender Tiefbass, 4-Stufen-Kompressor & L R-Balance.
+KI Sound-Tuning & Voice Sprach- & Chat-Steuerung über dein Google-Konto mit Gemini.
+Bluetooth Audio-Routing Auto-Bypass bei Bluetooth, pro Gerät speicherbare EQ-Profile.
+QR-Studio & Link Downloader Nothing X-QR-Presets teilen/scannen & Medien direkt laden.
+Design & System UI Hell, Dunkel, System, Material-You-Systempalette & Monochrom.
