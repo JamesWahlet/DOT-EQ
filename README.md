@@ -5,4 +5,4 @@ Ultra Bass & Dynamik Beat-erkennender Tiefbass, 4-Stufen-Kompressor & L R-Balanc
 KI Sound-Tuning & Voice Sprach- & Chat-Steuerung über dein Google-Konto mit Gemini.
 Bluetooth Audio-Routing Auto-Bypass bei Bluetooth, pro Gerät speicherbare EQ-Profile.
 QR-Studio & Link Downloader Nothing X-QR-Presets teilen/scannen & Medien direkt laden.
-Design & System UI Hell, Dunkel, System, Material-You-Systempalette & Monochrom.
+Design & System UI Hell, Dunkel.
