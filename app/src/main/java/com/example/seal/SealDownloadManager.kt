@@ -106,6 +106,18 @@ class SealDownloadManager(
         val query = action.songSearchQuery.trim()
 
         if (url.startsWith("http://", ignoreCase = true) || url.startsWith("https://", ignoreCase = true)) {
+            if (YouTubeAudioExtractor.isYouTubeUrl(url)) {
+                val ytHits = mediaRepo.searchTracks(url, activeSettings)
+                ytHits.fold(
+                    onSuccess = { hits ->
+                        _searchResults.value = hits
+                        return hits.take(3) to null
+                    },
+                    onFailure = { err ->
+                        return emptyList<SealTrackSuggestion>() to (err.message ?: "YouTube-Link konnte nicht aufgelöst werden.")
+                    }
+                )
+            }
             val directTitle = query.ifBlank { "Audio-Stream" }
             val ext = if (activeSettings.format == SealAudioFormat.ORIGINAL ||
                 activeSettings.quality == SealAudioQuality.AUTO
@@ -156,12 +168,17 @@ class SealDownloadManager(
         }
         val effectiveSettings = resolveEffectiveSettings("", qualityOverride)
         if (clean.startsWith("http://", ignoreCase = true) || clean.startsWith("https://", ignoreCase = true)) {
-            val rawName = clean.substringAfterLast('/').substringBefore('?').ifBlank { "Audio Track" }
+            val isYt = YouTubeAudioExtractor.isYouTubeUrl(clean)
+            val rawName = if (isYt) {
+                "YouTube Audio (${YouTubeAudioExtractor.extractVideoId(clean).orEmpty()})"
+            } else {
+                clean.substringAfterLast('/').substringBefore('?').ifBlank { "Audio Track" }
+            }
             val suggestion = SealTrackSuggestion(
                 id = UUID.randomUUID().toString(),
                 title = rawName,
-                artist = "",
-                sourceLabel = "URL",
+                artist = if (isYt) "YouTube" else "",
+                sourceLabel = if (isYt) "YouTube" else "URL",
                 shareUrl = clean,
                 downloadUrl = clean,
                 suggestedFilename = rawName
@@ -235,6 +252,8 @@ class SealDownloadManager(
                     onSuccess = { done ->
                         updateTask(taskId) {
                             copy(
+                                title = done.resolvedTitle.ifBlank { title },
+                                artist = done.resolvedArtist.ifBlank { artist },
                                 progress = 1f,
                                 bytesDownloaded = done.bytesWritten,
                                 totalBytes = maxOf(totalBytes, done.bytesWritten),

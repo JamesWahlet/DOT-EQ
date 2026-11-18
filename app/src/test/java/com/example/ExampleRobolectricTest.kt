@@ -2,12 +2,16 @@ package com.example
 
 import android.content.Context
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -32,7 +36,9 @@ class ExampleRobolectricTest {
 
     @Test
     fun `main studio launches and navigates all tabs`() {
-        composeRule.onNodeWithText("DOTEQ (01)").assertIsDisplayed()
+        composeRule.onNodeWithText("DOTEQ (01)").assertDoesNotExist()
+        composeRule.onNodeWithTag("top_create_preset_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("top_preset_name_button").assertIsDisplayed()
         composeRule.onNodeWithTag("interactive_eq_preview").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("simple_fader_low").assertExists()
 
@@ -65,6 +71,8 @@ class ExampleRobolectricTest {
     fun `qr studio opens from settings and exposes create share and scan controls`() {
         composeRule.onNodeWithTag("top_settings_button").performClick()
         composeRule.onNodeWithTag("settings_sheet").assertIsDisplayed()
+        composeRule.onNodeWithTag("settings_group_special").performScrollTo().performClick()
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag("settings_open_qr_button").performScrollTo().performClick()
 
         composeRule.onNodeWithTag("qr_studio_sheet").assertIsDisplayed()
@@ -124,21 +132,23 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `preset creation opens frosted nothing modal and saves preset`() {
+    fun `bottom presets strip keeps built-in presets and removes plus save button`() {
         composeRule.onNodeWithTag("system_service_switch").performScrollTo()
-        composeRule.onNodeWithTag("save_preset_button").performClick()
+        composeRule.onNodeWithTag("save_preset_button").assertDoesNotExist()
+        composeRule.onNodeWithTag("preset_flat_ref").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("preset_dot_punch").performScrollTo().performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("save_preset_dialog").assertIsDisplayed()
-        composeRule.onNodeWithTag("preset_name_input").assertIsDisplayed()
-        composeRule.onNodeWithTag("confirm_save_preset_button").performClick()
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("save_preset_dialog").assertDoesNotExist()
+        composeRule.onNode(
+            hasTestTag("top_preset_name_button") and hasText("DOT PUNCH", substring = true)
+        ).assertIsDisplayed()
     }
 
     @Test
     fun `link downloader opens from settings with quality prompt on load folder picker and no metadata toggle`() {
         composeRule.onNodeWithTag("top_settings_button").performClick()
         composeRule.onNodeWithTag("settings_sheet").assertIsDisplayed()
+        composeRule.onNodeWithTag("settings_group_special").performScrollTo().performClick()
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag("settings_seal_card").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("LINK DOWNLOADER").assertIsDisplayed()
         composeRule.onNodeWithTag("settings_open_seal_button").performScrollTo().performClick()
@@ -167,6 +177,144 @@ class ExampleRobolectricTest {
         composeRule.onNodeWithTag("link_quality_prompt_dialog").assertDoesNotExist()
 
         composeRule.onNodeWithTag("seal_close_button").performClick()
+        composeRule.onNodeWithTag("settings_close_button").performClick()
+    }
+
+    @Test
+    fun `top bar manages only custom presets without built-in equalizers`() {
+        // Initially top preset manager shows no built-in equalizers
+        composeRule.onNodeWithTag("top_preset_name_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("preset_manager_dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("preset_manager_empty_state").assertIsDisplayed()
+        composeRule.onNodeWithTag("preset_manager_select_flat_ref").assertDoesNotExist()
+        composeRule.onNodeWithTag("preset_manager_select_dot_punch").assertDoesNotExist()
+        composeRule.onNodeWithTag("preset_manager_restore_button").assertDoesNotExist()
+        composeRule.onNodeWithTag("preset_manager_close_button").performClick()
+        composeRule.waitForIdle()
+
+        // Create two custom presets from top bar +
+        composeRule.onNodeWithTag("top_create_preset_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("top_create_preset_dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("top_preset_name_input").performTextInput("MY STUDIO")
+        composeRule.onNodeWithTag("top_confirm_save_preset_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNode(
+            hasTestTag("top_preset_name_button") and hasText("MY STUDIO", substring = true)
+        ).assertIsDisplayed()
+
+        composeRule.onNodeWithTag("top_create_preset_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("top_preset_name_input").performTextInput("BASS BOOST")
+        composeRule.onNodeWithTag("top_confirm_save_preset_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNode(
+            hasTestTag("top_preset_name_button") and hasText("BASS BOOST", substring = true)
+        ).assertIsDisplayed()
+
+        // Open manager -> switch back to MY STUDIO
+        composeRule.onNodeWithTag("top_preset_name_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("preset_manager_dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("preset_manager_select_flat_ref").assertDoesNotExist()
+        composeRule.onNodeWithText("MY STUDIO").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNode(
+            hasTestTag("top_preset_name_button") and hasText("MY STUDIO", substring = true)
+        ).assertIsDisplayed()
+
+        // Re-open manager -> edit first custom preset to STUDIO REF
+        composeRule.onNodeWithTag("top_preset_name_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onAllNodesWithContentDescription("Preset ändern")[0].performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("preset_edit_section").assertIsDisplayed()
+        composeRule.onNodeWithTag("preset_edit_name_input").performTextReplacement("STUDIO REF")
+        composeRule.onNodeWithTag("preset_edit_save_button").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("STUDIO REF").assertIsDisplayed()
+
+        // Delete both custom presets cleanly
+        composeRule.onAllNodesWithContentDescription("Preset löschen")[0].performClick()
+        composeRule.waitForIdle()
+        composeRule.onAllNodesWithContentDescription("Preset löschen")[0].performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("preset_manager_empty_state").assertIsDisplayed()
+        composeRule.onNodeWithTag("preset_manager_close_button").performClick()
+    }
+
+    @Test
+    fun `settings appearance exposes light dark system system ui and monochrome toggle`() {
+        composeRule.onNodeWithTag("top_settings_button").performClick()
+        composeRule.onNodeWithTag("settings_sheet").assertIsDisplayed()
+        composeRule.onNodeWithTag("settings_group_design").performScrollTo().performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("theme_mode_light").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("theme_mode_dark").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("theme_mode_system").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("theme_mode_system_ui").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Übernimmt die aktuelle Farbpalette vom Android-System")
+            .performScrollTo()
+            .assertIsDisplayed()
+
+        composeRule.onNodeWithTag("settings_monochrome_switch").performScrollTo().performClick()
+        composeRule.waitForIdle()
+
+        // Restore defaults cleanly
+        composeRule.onNodeWithTag("settings_monochrome_switch").performScrollTo().performClick()
+        composeRule.onNodeWithTag("theme_mode_light").performScrollTo().performClick()
+        composeRule.onNodeWithTag("settings_close_button").performClick()
+    }
+
+    @Test
+    fun `settings exposes categorized subgroups language switch account and info github website`() {
+        composeRule.onNodeWithTag("top_settings_button").performClick()
+        composeRule.onNodeWithTag("settings_sheet").assertIsDisplayed()
+
+        // Quick-filter pills for all 6 subgroups exist, and ALL option does not exist
+        composeRule.onNodeWithTag("settings_group_all").assertDoesNotExist()
+        composeRule.onNodeWithTag("settings_group_connections").assertIsDisplayed()
+        composeRule.onNodeWithTag("settings_group_special").assertExists()
+        composeRule.onNodeWithTag("settings_group_design").assertExists()
+        composeRule.onNodeWithTag("settings_group_account").assertExists()
+        composeRule.onNodeWithTag("settings_group_language").assertExists()
+        composeRule.onNodeWithTag("settings_group_info").assertExists()
+
+        // Open Account subgroup
+        composeRule.onNodeWithTag("settings_group_account").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("settings_account_card").assertIsDisplayed()
+        composeRule.onNodeWithTag("settings_account_signin_button").assertIsDisplayed()
+
+        // Open Language subgroup & switch DE <-> EN
+        composeRule.onNodeWithTag("settings_group_language").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("settings_language_card").assertIsDisplayed()
+        composeRule.onNodeWithTag("settings_lang_en").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("SETTINGS").assertIsDisplayed()
+
+        // Open Info subgroup in English & verify features, version, GitHub & website buttons
+        composeRule.onNodeWithTag("settings_group_info").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("settings_info_card").assertIsDisplayed()
+        composeRule.onNodeWithText("FEATURE OVERVIEW").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("info_check_updates_button").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("info_open_github_button").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag("info_open_website_button").performScrollTo().assertIsDisplayed()
+
+        // Restore German language cleanly
+        composeRule.onNodeWithTag("settings_group_language").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("settings_lang_de").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("EINSTELLUNGEN").assertIsDisplayed()
+
         composeRule.onNodeWithTag("settings_close_button").performClick()
     }
 }

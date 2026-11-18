@@ -1,5 +1,6 @@
 package com.example
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -26,9 +27,19 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val themeMode by eqViewModel.themeMode.collectAsStateWithLifecycle()
-            DotEqTheme(themeMode = themeMode) {
+            val monochromeEnabled by eqViewModel.monochromeEnabled.collectAsStateWithLifecycle()
+            DotEqTheme(
+                themeMode = themeMode,
+                monochrome = monochromeEnabled
+            ) {
                 DotEqAppRoot(viewModel = eqViewModel)
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        configureAppCheck(this, intent)
     }
 }

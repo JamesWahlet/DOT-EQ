@@ -117,6 +117,7 @@ fun AiTunerScreen(
     onCopySongLink: (SealTrackSuggestion) -> Unit = {},
     onDownloadSong: (SealTrackSuggestion) -> Unit = {},
     onOpenSealDownloader: () -> Unit = {},
+    onRetryLastMessage: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -362,13 +363,15 @@ fun AiTunerScreen(
                             } else {
                                 AssistantChatBubble(
                                     message = msg,
+                                    isSending = isSending,
                                     onApplyRecommendation = onApplyRecommendation,
                                     onSaveAiPreset = onSaveAiPreset,
                                     onCopySongLink = { track ->
                                         copyToClipboard(context, track.shareUrl)
                                         onCopySongLink(track)
                                     },
-                                    onDownloadSong = onDownloadSong
+                                    onDownloadSong = onDownloadSong,
+                                    onRetry = onRetryLastMessage
                                 )
                             }
                         }
@@ -704,10 +707,12 @@ fun AiTunerScreen(
 @Composable
 private fun AssistantChatBubble(
     message: AiChatMessage,
+    isSending: Boolean,
     onApplyRecommendation: (AiSoundRecommendation) -> Unit,
     onSaveAiPreset: (AiSoundRecommendation) -> Unit,
     onCopySongLink: (SealTrackSuggestion) -> Unit,
-    onDownloadSong: (SealTrackSuggestion) -> Unit
+    onDownloadSong: (SealTrackSuggestion) -> Unit,
+    onRetry: () -> Unit
 ) {
     val colors = LocalNothingColors.current
     Column(
@@ -751,6 +756,25 @@ private fun AssistantChatBubble(
             style = MaterialTheme.typography.bodyMedium,
             color = if (message.isError) NothingRed else colors.inkPrimary
         )
+
+        if (message.isError) {
+            OutlinedButton(
+                onClick = onRetry,
+                enabled = !isSending,
+                shape = RoundedCornerShape(50),
+                modifier = Modifier
+                    .height(40.dp)
+                    .testTag("ai_retry_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Refresh,
+                    contentDescription = null,
+                    modifier = Modifier.size(15.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("ERNEUT VERSUCHEN", style = MaterialTheme.typography.labelSmall)
+            }
+        }
 
         if (message.previewBandsDb != null) {
             Box(

@@ -142,7 +142,9 @@ class VoiceInputController(
                         if (error == SpeechRecognizer.ERROR_CLIENT ||
                             error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ||
                             error == SpeechRecognizer.ERROR_NETWORK ||
-                            error == SpeechRecognizer.ERROR_SERVER
+                            error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT ||
+                            error == SpeechRecognizer.ERROR_SERVER ||
+                            error == SpeechRecognizer.ERROR_SERVER_DISCONNECTED
                         ) {
                             // Fallback seamlessly to real PCM mic recording -> Gemini Multimodal Audio
                             startDirectPcmCapture()

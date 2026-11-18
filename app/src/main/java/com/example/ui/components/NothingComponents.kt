@@ -567,7 +567,7 @@ fun NothingHardwarePowerSwitch(
     )
     val borderTint by animateColorAsState(
         targetValue = if (enabled) {
-            colors.green.copy(alpha = 0.92f)
+            if (colors.isMonochrome) colors.inkPrimary else colors.green.copy(alpha = 0.92f)
         } else {
             colors.cardBorder
         },
@@ -576,7 +576,11 @@ fun NothingHardwarePowerSwitch(
     )
     val labelTint by animateColorAsState(
         targetValue = if (enabled) {
-            if (colors.isDark) colors.greenGlow else Color(0xFF0A8F3D)
+            when {
+                colors.isMonochrome -> colors.inkPrimary
+                colors.isDark -> colors.greenGlow
+                else -> Color(0xFF0A8F3D)
+            }
         } else {
             colors.inkSecondary
         },
@@ -850,7 +854,7 @@ fun NothingBudsGlyphIllustration(
             center = Offset(rX + headR * 0.35f, budTop + headR * 0.65f)
         )
         drawCircle(
-            color = Color(0xFFF22626),
+            color = if (accentColor == inkColor) accentColor else Color(0xFFF22626),
             radius = 2.4.dp.toPx(),
             center = Offset(rX, budTop + stemH * 0.72f)
         )

@@ -207,7 +207,7 @@ fun SealDownloaderSheet(
                             onValueChange = { queryInput = it },
                             placeholder = {
                                 Text(
-                                    text = "Songname, Artist oder Audio-URL...",
+                                    text = "Songname, YouTube- oder Audio-URL...",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = colors.inkMuted
                                 )

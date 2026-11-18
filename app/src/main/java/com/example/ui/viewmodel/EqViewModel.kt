@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.BuildConfig
 import com.example.ai.AiChatActionResult
 import com.example.ai.AiChatMessage
 import com.example.ai.AiSoundRecommendation
@@ -18,6 +19,7 @@ import com.example.audio.SystemEqService
 import com.example.auth.AuthenticatedUser
 import com.example.auth.GoogleAuthManager
 import com.example.data.EqPreferencesRepository
+import com.example.model.AppLanguage
 import com.example.model.AudioPreset
 import com.example.model.BluetoothAudioSettings
 import com.example.model.BluetoothDeviceRoute
@@ -29,6 +31,7 @@ import com.example.model.DspStatus
 import com.example.model.EqMode
 import com.example.model.EqProfileSnapshot
 import com.example.model.EqState
+import com.example.model.GitHubUpdateState
 import com.example.model.SealAudioFormat
 import com.example.model.SealAudioQuality
 import com.example.model.SealDownloadTask
@@ -42,6 +45,7 @@ import com.example.model.withProfileSnapshot
 import com.example.seal.SealDownloadManager
 import com.example.seal.SealMediaRepository
 import com.example.ui.theme.ThemeMode
+import com.example.update.GitHubUpdateRepository
 import java.util.UUID
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -51,6 +55,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -71,17 +76,30 @@ enum class StudioTab {
 class EqViewModel(application: Application) : AndroidViewModel(application) {
 
     private val prefsRepo = EqPreferencesRepository(application)
-    private val aiRepo = SoundTuningAiRepository()
+    private val aiRepo = SoundTuningAiRepository(application)
     private val authManager = GoogleAuthManager(application)
     private val bluetoothMonitor = BluetoothAudioMonitor(application)
     private val sealRepo = SealMediaRepository(application)
     private val sealManager = SealDownloadManager(viewModelScope, prefsRepo, sealRepo)
+    private val updateRepo = GitHubUpdateRepository()
 
     private val _eqState = MutableStateFlow(EqState())
     val eqState: StateFlow<EqState> = _eqState.asStateFlow()
 
     private val _themeMode = MutableStateFlow(ThemeMode.LIGHT)
     val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
+
+    private val _monochromeEnabled = MutableStateFlow(false)
+    val monochromeEnabled: StateFlow<Boolean> = _monochromeEnabled.asStateFlow()
+
+    private val _appLanguage = MutableStateFlow(AppLanguage.DE)
+    val appLanguage: StateFlow<AppLanguage> = _appLanguage.asStateFlow()
+
+    private val _githubRepo = MutableStateFlow(GitHubUpdateRepository.DEFAULT_GITHUB_REPO)
+    val githubRepo: StateFlow<String> = _githubRepo.asStateFlow()
+
+    private val _updateState = MutableStateFlow<GitHubUpdateState>(GitHubUpdateState.Idle)
+    val updateState: StateFlow<GitHubUpdateState> = _updateState.asStateFlow()
 
     private val _visualizerMode = MutableStateFlow(VisualizerMode.SPECTRUM)
     val visualizerMode: StateFlow<VisualizerMode> = _visualizerMode.asStateFlow()
@@ -141,13 +159,14 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     val dspStatus: StateFlow<DspStatus> = SystemDspEngine.status
     val visualizerFrame: StateFlow<VisualizerFrame> = SystemDspEngine.visualizerFrame
 
-    val allPresets: StateFlow<List<AudioPreset>> = prefsRepo.customPresetsFlow
-        .combine(MutableStateFlow(EqPreferencesRepository.BUILT_IN_PRESETS)) { custom, builtIn ->
-            custom + builtIn
-        }
+    private val _customPresets = MutableStateFlow<List<AudioPreset>>(emptyList())
+    val customPresets: StateFlow<List<AudioPreset>> = _customPresets.asStateFlow()
+
+    val allPresets: StateFlow<List<AudioPreset>> = _customPresets
+        .map { it + EqPreferencesRepository.BUILT_IN_PRESETS }
         .stateIn(
             scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5_000),
+            started = SharingStarted.Eagerly,
             initialValue = EqPreferencesRepository.BUILT_IN_PRESETS
         )
 
@@ -159,12 +178,19 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     private var isInitialized = false
     private var userMutatedStateBeforeInit = false
     private var userMutatedBtBeforeInit = false
+    private var userMutatedPresetsBeforeInit = false
+    private var lastAiTextPrompt: String? = null
+    private var lastAiWavBytes: ByteArray? = null
 
     init {
         viewModelScope.launch {
             val savedState = prefsRepo.eqStateFlow.first()
             val savedTheme = prefsRepo.themeModeFlow.first()
+            val savedMonochrome = prefsRepo.monochromeFlow.first()
+            val savedLanguage = prefsRepo.appLanguageFlow.first()
+            val savedGithubRepo = prefsRepo.githubRepoFlow.first()
             val savedBt = prefsRepo.bluetoothSettingsFlow.first()
+            val savedPresets = prefsRepo.customPresetsFlow.first()
 
             if (!userMutatedStateBeforeInit) {
                 _eqState.value = savedState
@@ -172,8 +198,14 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                 lastNonBtMasterEnabled = savedState.masterEnabled
             }
             _themeMode.value = savedTheme
+            _monochromeEnabled.value = savedMonochrome
+            _appLanguage.value = savedLanguage
+            _githubRepo.value = savedGithubRepo
             if (!userMutatedBtBeforeInit) {
                 _bluetoothSettings.value = savedBt
+            }
+            if (!userMutatedPresetsBeforeInit) {
+                _customPresets.value = savedPresets
             }
 
             SystemDspEngine.initialize(getApplication(), _eqState.value)
@@ -441,16 +473,56 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         _activeTab.value = tab
     }
 
+    fun setThemeMode(mode: ThemeMode) {
+        _themeMode.value = mode
+        viewModelScope.launch {
+            prefsRepo.saveThemeMode(mode)
+        }
+    }
+
+    fun setMonochromeEnabled(enabled: Boolean) {
+        _monochromeEnabled.value = enabled
+        viewModelScope.launch {
+            prefsRepo.saveMonochromeEnabled(enabled)
+        }
+    }
+
+    fun setAppLanguage(language: AppLanguage) {
+        _appLanguage.value = language
+        viewModelScope.launch {
+            prefsRepo.saveAppLanguage(language)
+        }
+    }
+
+    fun updateGithubRepo(repoSlug: String) {
+        val normalized = GitHubUpdateRepository.normalizeRepoSlug(repoSlug)
+        _githubRepo.value = normalized
+        viewModelScope.launch {
+            prefsRepo.saveGithubRepo(normalized)
+        }
+        checkForUpdates(normalized)
+    }
+
+    fun checkForUpdates(overrideRepoSlug: String? = null) {
+        if (_updateState.value is GitHubUpdateState.Checking) return
+        val slug = overrideRepoSlug ?: _githubRepo.value
+        _updateState.value = GitHubUpdateState.Checking
+        viewModelScope.launch {
+            _updateState.value = updateRepo.checkForUpdates(
+                repoSlugInput = slug,
+                currentVersion = BuildConfig.VERSION_NAME
+            )
+        }
+    }
+
     fun cycleThemeMode() {
         val next = when (_themeMode.value) {
             ThemeMode.LIGHT -> ThemeMode.DARK
-            ThemeMode.DARK -> ThemeMode.LIGHT
-            ThemeMode.SYSTEM -> ThemeMode.DARK
+            ThemeMode.DARK -> ThemeMode.SYSTEM
+            ThemeMode.SYSTEM -> ThemeMode.SYSTEM_UI
+            ThemeMode.SYSTEM_UI -> ThemeMode.LIGHT
         }
-        _themeMode.value = next
-        viewModelScope.launch {
-            prefsRepo.saveThemeMode(next)
-        }
+        setThemeMode(next)
     }
 
     fun setVisualizerMode(mode: VisualizerMode) {
@@ -657,13 +729,19 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun saveImportedQrPreset(preset: AudioPreset, applyNow: Boolean) {
+    private fun commitCustomPresets(updated: List<AudioPreset>) {
+        userMutatedPresetsBeforeInit = true
+        _customPresets.value = updated
         viewModelScope.launch {
-            val existing = prefsRepo.customPresetsFlow.first()
-            prefsRepo.saveCustomPresets(listOf(preset) + existing)
-            if (applyNow) {
-                applyPreset(preset)
-            }
+            prefsRepo.saveCustomPresets(updated)
+        }
+    }
+
+    fun saveImportedQrPreset(preset: AudioPreset, applyNow: Boolean) {
+        val normalized = preset.copy(isCustom = true)
+        commitCustomPresets(listOf(normalized) + _customPresets.value)
+        if (applyNow) {
+            applyPreset(normalized)
         }
     }
 
@@ -689,17 +767,51 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
             ultraBassEnabled = s.ultraBassEnabled,
             ultraBassLevel = s.ultraBassLevel
         )
-        viewModelScope.launch {
-            val existing = prefsRepo.customPresetsFlow.first()
-            prefsRepo.saveCustomPresets(listOf(newPreset) + existing)
-            updateState { copy(activePresetName = trimmed) }
+        commitCustomPresets(listOf(newPreset) + _customPresets.value)
+        updateState { copy(activePresetName = trimmed) }
+    }
+
+    fun updatePreset(
+        presetId: String,
+        newName: String,
+        overwriteWithCurrentEq: Boolean
+    ) {
+        val existingList = _customPresets.value
+        val target = existingList.firstOrNull { it.id == presetId } ?: return
+        val cleanName = newName.trim().uppercase().take(18).ifBlank { target.name }
+        val s = _eqState.value
+        val updatedPreset = if (overwriteWithCurrentEq) {
+            target.copy(
+                name = cleanName,
+                isCustom = true,
+                mode = s.mode,
+                simpleLowDb = s.simpleLowDb,
+                simpleMidDb = s.simpleMidDb,
+                simpleHighDb = s.simpleHighDb,
+                expertBandsDb = s.expertBandsDb,
+                preampDb = s.preampDb,
+                crossover = s.crossover,
+                compressor = s.compressor,
+                balance = s.balance,
+                ultraBassEnabled = s.ultraBassEnabled,
+                ultraBassLevel = s.ultraBassLevel
+            )
+        } else {
+            target.copy(name = cleanName)
+        }
+        val updatedList = existingList.map { if (it.id == presetId) updatedPreset else it }
+        commitCustomPresets(updatedList)
+        if (s.activePresetName == target.name || overwriteWithCurrentEq) {
+            updateState { copy(activePresetName = cleanName) }
         }
     }
 
     fun deleteCustomPreset(presetId: String) {
-        viewModelScope.launch {
-            val existing = prefsRepo.customPresetsFlow.first()
-            prefsRepo.saveCustomPresets(existing.filterNot { it.id == presetId })
+        val existing = _customPresets.value
+        val removed = existing.firstOrNull { it.id == presetId }
+        commitCustomPresets(existing.filterNot { it.id == presetId })
+        if (removed != null && _eqState.value.activePresetName == removed.name) {
+            updateState { copy(activePresetName = "CUSTOM EQ") }
         }
     }
 
@@ -736,6 +848,8 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
     fun sendAiAudioMessage(wavBytes: ByteArray) {
         if (_authUser.value == null || _isAiSending.value || wavBytes.isEmpty()) return
 
+        lastAiTextPrompt = null
+        lastAiWavBytes = wavBytes
         _chatMessages.value = _chatMessages.value + AiChatMessage(
             isUser = true,
             text = "Sprachbefehl gesendet"
@@ -788,11 +902,85 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun retryLastAiMessage() {
+        if (_authUser.value == null || _isAiSending.value) return
+        val pendingText = lastAiTextPrompt
+        val pendingWav = lastAiWavBytes
+        if (pendingText.isNullOrBlank() && (pendingWav == null || pendingWav.isEmpty())) return
+
+        // Remove the last error bubble before retrying
+        val current = _chatMessages.value
+        if (current.lastOrNull()?.isError == true) {
+            _chatMessages.value = current.dropLast(1)
+        }
+
+        if (!pendingText.isNullOrBlank()) {
+            _isAiSending.value = true
+            _aiState.value = AiTuningUiState.Loading
+            viewModelScope.launch {
+                val result = aiRepo.sendAssistantMessage(
+                    userMessage = pendingText,
+                    currentEqState = _eqState.value,
+                    bluetoothState = bluetoothMonitor.state.value,
+                    bluetoothSettings = _bluetoothSettings.value,
+                    presets = allPresets.value
+                )
+                handleAiTextResult(result, pendingText)
+            }
+        } else if (pendingWav != null && pendingWav.isNotEmpty()) {
+            _isAiSending.value = true
+            _aiState.value = AiTuningUiState.Loading
+            viewModelScope.launch {
+                val result = aiRepo.sendAssistantAudioMessage(
+                    wavBytes = pendingWav,
+                    currentEqState = _eqState.value,
+                    bluetoothState = bluetoothMonitor.state.value,
+                    bluetoothSettings = _bluetoothSettings.value,
+                    presets = allPresets.value
+                )
+                result.fold(
+                    onSuccess = { action ->
+                        val updatedEq = applyAiChatAction(action)
+                        val (songHits, songErr) = sealManager.resolveForAiAction(action)
+                        _isAiSending.value = false
+                        _chatMessages.value = _chatMessages.value + AiChatMessage(
+                            isUser = false,
+                            text = action.assistantReply,
+                            appliedBadges = action.appliedBadges,
+                            previewBandsDb = if (action.applyEq || action.resetFlat || action.saveAsPreset) {
+                                AudioMath.effectiveEqBands(updatedEq)
+                            } else {
+                                null
+                            },
+                            recommendation = action.recommendation,
+                            downloadSuggestions = songHits,
+                            downloadLookupError = songErr
+                        )
+                        _aiState.value = action.recommendation?.let { AiTuningUiState.Success(it) }
+                            ?: AiTuningUiState.Idle
+                    },
+                    onFailure = { err ->
+                        _isAiSending.value = false
+                        val errorMsg = err.message ?: "Sprachbefehl fehlgeschlagen."
+                        _chatMessages.value = _chatMessages.value + AiChatMessage(
+                            isUser = false,
+                            text = errorMsg,
+                            isError = true
+                        )
+                        _aiState.value = AiTuningUiState.Error(errorMsg)
+                    }
+                )
+            }
+        }
+    }
+
     fun sendAiChatMessage(prompt: String) {
         if (_authUser.value == null) return
         val trimmed = prompt.trim()
         if (trimmed.isBlank() || _isAiSending.value) return
 
+        lastAiTextPrompt = trimmed
+        lastAiWavBytes = null
         val userMsg = AiChatMessage(isUser = true, text = trimmed)
         _chatMessages.value = _chatMessages.value + userMsg
         _isAiSending.value = true
@@ -806,41 +994,47 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                 bluetoothSettings = _bluetoothSettings.value,
                 presets = allPresets.value
             )
-
-            result.fold(
-                onSuccess = { action ->
-                    val updatedEq = applyAiChatAction(action)
-                    val (songHits, songErr) = sealManager.resolveForAiAction(action)
-                    _isAiSending.value = false
-                    val assistantMsg = AiChatMessage(
-                        isUser = false,
-                        text = action.assistantReply,
-                        appliedBadges = action.appliedBadges,
-                        previewBandsDb = if (action.applyEq || action.resetFlat || action.saveAsPreset) {
-                            AudioMath.effectiveEqBands(updatedEq)
-                        } else {
-                            null
-                        },
-                        recommendation = action.recommendation,
-                        downloadSuggestions = songHits,
-                        downloadLookupError = songErr
-                    )
-                    _chatMessages.value = _chatMessages.value + assistantMsg
-                    _aiState.value = action.recommendation?.let { AiTuningUiState.Success(it) }
-                        ?: AiTuningUiState.Idle
-                },
-                onFailure = { err ->
-                    _isAiSending.value = false
-                    val errorMsg = err.message ?: "Verbindung zu Gemini fehlgeschlagen."
-                    _chatMessages.value = _chatMessages.value + AiChatMessage(
-                        isUser = false,
-                        text = errorMsg,
-                        isError = true
-                    )
-                    _aiState.value = AiTuningUiState.Error(errorMsg)
-                }
-            )
+            handleAiTextResult(result, trimmed)
         }
+    }
+
+    private suspend fun handleAiTextResult(
+        result: Result<AiChatActionResult>,
+        @Suppress("UNUSED_PARAMETER") prompt: String
+    ) {
+        result.fold(
+            onSuccess = { action ->
+                val updatedEq = applyAiChatAction(action)
+                val (songHits, songErr) = sealManager.resolveForAiAction(action)
+                _isAiSending.value = false
+                val assistantMsg = AiChatMessage(
+                    isUser = false,
+                    text = action.assistantReply,
+                    appliedBadges = action.appliedBadges,
+                    previewBandsDb = if (action.applyEq || action.resetFlat || action.saveAsPreset) {
+                        AudioMath.effectiveEqBands(updatedEq)
+                    } else {
+                        null
+                    },
+                    recommendation = action.recommendation,
+                    downloadSuggestions = songHits,
+                    downloadLookupError = songErr
+                )
+                _chatMessages.value = _chatMessages.value + assistantMsg
+                _aiState.value = action.recommendation?.let { AiTuningUiState.Success(it) }
+                    ?: AiTuningUiState.Idle
+            },
+            onFailure = { err ->
+                _isAiSending.value = false
+                val errorMsg = err.message ?: "Verbindung zu Gemini fehlgeschlagen."
+                _chatMessages.value = _chatMessages.value + AiChatMessage(
+                    isUser = false,
+                    text = errorMsg,
+                    isError = true
+                )
+                _aiState.value = AiTuningUiState.Error(errorMsg)
+            }
+        )
     }
 
     private suspend fun applyAiChatAction(action: AiChatActionResult): EqState {
@@ -963,8 +1157,7 @@ class EqViewModel(application: Application) : AndroidViewModel(application) {
                 ultraBassEnabled = next.ultraBassEnabled,
                 ultraBassLevel = next.ultraBassLevel
             )
-            val existing = prefsRepo.customPresetsFlow.first()
-            prefsRepo.saveCustomPresets(listOf(newPreset) + existing)
+            commitCustomPresets(listOf(newPreset) + _customPresets.value)
             next = next.copy(activePresetName = action.profileName)
             commitState(next)
         }

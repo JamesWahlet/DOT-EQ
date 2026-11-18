@@ -3,10 +3,12 @@ package com.example.data
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.audio.AudioMath
+import com.example.model.AppLanguage
 import com.example.model.AudioPreset
 import com.example.model.BluetoothAudioSettings
 import com.example.model.BluetoothDeviceRule
@@ -23,6 +25,7 @@ import com.example.model.SealDownloadTask
 import com.example.model.SealSaveLocation
 import com.example.model.SealSettings
 import com.example.ui.theme.ThemeMode
+import com.example.update.GitHubUpdateRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
@@ -36,6 +39,9 @@ class EqPreferencesRepository(private val context: Context) {
         val EQ_STATE_JSON = stringPreferencesKey("eq_state_json")
         val CUSTOM_PRESETS_JSON = stringPreferencesKey("custom_presets_json")
         val THEME_MODE = stringPreferencesKey("theme_mode")
+        val MONOCHROME_ENABLED = booleanPreferencesKey("monochrome_enabled")
+        val APP_LANGUAGE = stringPreferencesKey("app_language")
+        val GITHUB_REPO = stringPreferencesKey("github_repo")
         val BLUETOOTH_SETTINGS_JSON = stringPreferencesKey("bluetooth_settings_json")
         val SEAL_SETTINGS_JSON = stringPreferencesKey("seal_settings_json")
         val SEAL_HISTORY_JSON = stringPreferencesKey("seal_history_json")
@@ -48,15 +54,25 @@ class EqPreferencesRepository(private val context: Context) {
 
     val customPresetsFlow: Flow<List<AudioPreset>> = context.eqDataStore.data.map { prefs ->
         val raw = prefs[Keys.CUSTOM_PRESETS_JSON]
-        if (raw.isNullOrBlank()) emptyList() else decodePresetList(raw)
+        val stored = if (raw.isNullOrBlank()) emptyList() else decodePresetList(raw)
+        val builtInIds = BUILT_IN_PRESETS.map { it.id }.toSet()
+        stored.filterNot { it.id in builtInIds && !it.isCustom }
     }
 
     val themeModeFlow: Flow<ThemeMode> = context.eqDataStore.data.map { prefs ->
-        when (prefs[Keys.THEME_MODE]) {
-            ThemeMode.DARK.name -> ThemeMode.DARK
-            ThemeMode.SYSTEM.name -> ThemeMode.SYSTEM
-            else -> ThemeMode.LIGHT
-        }
+        ThemeMode.entries.firstOrNull { it.name == prefs[Keys.THEME_MODE] } ?: ThemeMode.LIGHT
+    }
+
+    val monochromeFlow: Flow<Boolean> = context.eqDataStore.data.map { prefs ->
+        prefs[Keys.MONOCHROME_ENABLED] == true
+    }
+
+    val appLanguageFlow: Flow<AppLanguage> = context.eqDataStore.data.map { prefs ->
+        AppLanguage.entries.firstOrNull { it.name == prefs[Keys.APP_LANGUAGE] } ?: AppLanguage.DE
+    }
+
+    val githubRepoFlow: Flow<String> = context.eqDataStore.data.map { prefs ->
+        prefs[Keys.GITHUB_REPO]?.takeIf { it.isNotBlank() } ?: GitHubUpdateRepository.DEFAULT_GITHUB_REPO
     }
 
     val bluetoothSettingsFlow: Flow<BluetoothAudioSettings> = context.eqDataStore.data.map { prefs ->
@@ -89,6 +105,24 @@ class EqPreferencesRepository(private val context: Context) {
     suspend fun saveThemeMode(mode: ThemeMode) {
         context.eqDataStore.edit { prefs ->
             prefs[Keys.THEME_MODE] = mode.name
+        }
+    }
+
+    suspend fun saveMonochromeEnabled(enabled: Boolean) {
+        context.eqDataStore.edit { prefs ->
+            prefs[Keys.MONOCHROME_ENABLED] = enabled
+        }
+    }
+
+    suspend fun saveAppLanguage(language: AppLanguage) {
+        context.eqDataStore.edit { prefs ->
+            prefs[Keys.APP_LANGUAGE] = language.name
+        }
+    }
+
+    suspend fun saveGithubRepo(repoSlug: String) {
+        context.eqDataStore.edit { prefs ->
+            prefs[Keys.GITHUB_REPO] = GitHubUpdateRepository.normalizeRepoSlug(repoSlug)
         }
     }
 

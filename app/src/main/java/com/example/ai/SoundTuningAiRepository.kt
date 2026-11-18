@@ -1,5 +1,8 @@
 package com.example.ai
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.util.Log
 import com.example.audio.AudioMath
 import com.example.audio.BluetoothAudioState
@@ -16,7 +19,12 @@ import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.Schema
 import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.generationConfig
+import java.net.ConnectException
+import java.net.NoRouteToHostException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.UUID
+import javax.net.ssl.SSLException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
@@ -24,6 +32,7 @@ import org.json.JSONObject
 
 private const val TAG = "SoundTuningAiRepo"
 const val DOTEQ_GEMINI_MODEL_ID = "gemini-3.8-flash"
+const val DOTEQ_GEMINI_FALLBACK_MODEL_ID = "gemini-3.5-flash-lite"
 
 data class AiSoundRecommendation(
     val preset: AudioPreset,
@@ -93,7 +102,9 @@ data class AiChatMessage(
     val isError: Boolean = false
 )
 
-class SoundTuningAiRepository {
+class SoundTuningAiRepository(
+    private val context: Context? = null
+) {
 
     private val assistantActionSchema = Schema.obj(
         properties = mapOf(
@@ -164,33 +175,83 @@ class SoundTuningAiRepository {
             "songSearchQuery" to Schema.string(description = "Clean 'Artist - Title' or song search keywords when requestSongDownload=true."),
             "songUrl" to Schema.string(description = "Direct URL if user pasted a link to download, else empty string."),
             "preferredDownloadFormat" to Schema.string(description = "Optional target format: M4A, MP3, FLAC, OGG, or empty.")
+        ),
+        optionalProperties = listOf(
+            "profileName",
+            "simpleLowDb",
+            "simpleMidDb",
+            "simpleHighDb",
+            "expertBandsDb",
+            "preampDb",
+            "ultraBassEnabled",
+            "ultraBassLevel",
+            "crossoverLowEnabled",
+            "crossoverMidEnabled",
+            "crossoverHighEnabled",
+            "crossoverLowMidHz",
+            "crossoverMidHighHz",
+            "crossoverLowGainDb",
+            "crossoverMidGainDb",
+            "crossoverHighGainDb",
+            "crossoverSlopeDbPerOct",
+            "compressorEnabled",
+            "compressorIntensity",
+            "compressorPreset",
+            "compressorThresholdDb",
+            "compressorRatio",
+            "compressorAttackMs",
+            "compressorReleaseMs",
+            "compressorMakeupGainDb",
+            "balance",
+            "targetMasterEnabled",
+            "bluetoothTargetDeviceName",
+            "bluetoothCustomEqEnabled",
+            "targetGlobalAutoBypass",
+            "songSearchQuery",
+            "songUrl",
+            "preferredDownloadFormat"
         )
     )
 
-    private val chatModel by lazy {
-        val config = generationConfig {
+    private val systemPromptContent by lazy {
+        content {
+            text(
+                "You are DotEQ's built-in audio DSP & Link Downloader assistant powered by Google Gemini. " +
+                    "Every turn includes [LIVE_DSP_CONTEXT] with current EQ, Ultra Bass (smart bass/beat boost), Crossover (including active low/mid/high bands), Compressor, L/R Balance, Presets, and Bluetooth devices.\n\n" +
+                    "RULES:\n" +
+                    "1. Act immediately on requests: 'mehr Bass' -> boost low EQ and optionally enable/raise Ultra Bass; 'Ultra Bass an' -> applyUltraBass=true, ultraBassEnabled=true.\n" +
+                    "2. 'Crossover' requests -> set applyCrossover=true, adjust crossoverLowMidHz/crossoverMidHighHz and crossoverLowEnabled/MidEnabled/HighEnabled (e.g. 'nur Bass' -> lowEnabled=true, midEnabled=false, highEnabled=false).\n" +
+                    "3. 'Balance rechts/links/mitte' -> set applyBalance=true and balance (-1.0..+1.0).\n" +
+                    "4. 'Kompressor' -> set applyCompressor=true with compressorEnabled, compressorIntensity (0..1), and compressorPreset (SOFT/BALANCED/PUNCH/LIMITER).\n" +
+                    "5. 'Preset erstellen/speichern' -> saveAsPreset=true.\n" +
+                    "6. Bluetooth device requests -> bindToBluetooth=true with bluetoothTargetDeviceName (matching device or 'CURRENT') and bluetoothCustomEqEnabled.\n" +
+                    "7. Song / music download requests (e.g. 'Lade <Song> herunter', 'Song suchen', 'Link für <Song>', or YouTube URLs): set requestSongDownload=true, songSearchQuery='<Artist Title>', songUrl if URL provided, and preferredDownloadFormat if requested (MP3/M4A/FLAC). Unless EQ changes were also asked, set applyEq=false.\n" +
+                    "8. Reply concisely in the user's language in assistantReply."
+            )
+        }
+    }
+
+    private val jsonConfig by lazy {
+        generationConfig {
             responseMimeType = "application/json"
             responseSchema = assistantActionSchema
             temperature = 0.35f
         }
+    }
+
+    private val chatModel by lazy {
         Firebase.ai.generativeModel(
             modelName = DOTEQ_GEMINI_MODEL_ID,
-            generationConfig = config,
-            systemInstruction = content {
-                text(
-                    "You are DotEQ's built-in audio DSP & Link Downloader assistant powered by Google Gemini. " +
-                        "Every turn includes [LIVE_DSP_CONTEXT] with current EQ, Ultra Bass (smart bass/beat boost), Crossover (including active low/mid/high bands), Compressor, L/R Balance, Presets, and Bluetooth devices.\n\n" +
-                        "RULES:\n" +
-                        "1. Act immediately on requests: 'mehr Bass' -> boost low EQ and optionally enable/raise Ultra Bass; 'Ultra Bass an' -> applyUltraBass=true, ultraBassEnabled=true.\n" +
-                        "2. 'Crossover' requests -> set applyCrossover=true, adjust crossoverLowMidHz/crossoverMidHighHz and crossoverLowEnabled/MidEnabled/HighEnabled (e.g. 'nur Bass' -> lowEnabled=true, midEnabled=false, highEnabled=false).\n" +
-                        "3. 'Balance rechts/links/mitte' -> set applyBalance=true and balance (-1.0..+1.0).\n" +
-                        "4. 'Kompressor' -> set applyCompressor=true with compressorEnabled, compressorIntensity (0..1), and compressorPreset (SOFT/BALANCED/PUNCH/LIMITER).\n" +
-                        "5. 'Preset erstellen/speichern' -> saveAsPreset=true.\n" +
-                        "6. Bluetooth device requests -> bindToBluetooth=true with bluetoothTargetDeviceName (matching device or 'CURRENT') and bluetoothCustomEqEnabled.\n" +
-                        "7. Song / music download requests (e.g. 'Lade <Song> herunter', 'Song suchen', 'Link für <Song>'): set requestSongDownload=true, songSearchQuery='<Artist Title>', songUrl if URL provided, and preferredDownloadFormat if requested (MP3/M4A/FLAC). Unless EQ changes were also asked, set applyEq=false.\n" +
-                        "8. Reply concisely in the user's language in assistantReply."
-                )
-            }
+            generationConfig = jsonConfig,
+            systemInstruction = systemPromptContent
+        )
+    }
+
+    private val fallbackModel by lazy {
+        Firebase.ai.generativeModel(
+            modelName = DOTEQ_GEMINI_FALLBACK_MODEL_ID,
+            generationConfig = jsonConfig,
+            systemInstruction = systemPromptContent
         )
     }
 
@@ -204,6 +265,52 @@ class SoundTuningAiRepository {
         return activeChat ?: chatModel.startChat().also { activeChat = it }
     }
 
+    private fun isOnline(): Boolean {
+        val ctx = context ?: return true
+        return runCatching {
+            val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                ?: return@runCatching true
+            val net = cm.activeNetwork ?: return@runCatching false
+            val caps = cm.getNetworkCapabilities(net) ?: return@runCatching false
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        }.getOrDefault(true)
+    }
+
+    internal fun isNetworkException(t: Throwable): Boolean {
+        var cur: Throwable? = t
+        while (cur != null) {
+            if (cur is UnknownHostException ||
+                cur is ConnectException ||
+                cur is NoRouteToHostException ||
+                cur is SSLException ||
+                cur is SocketTimeoutException
+            ) {
+                return true
+            }
+            val msg = cur.message?.lowercase().orEmpty()
+            if (msg.contains("unable to resolve host") ||
+                msg.contains("failed to connect") ||
+                msg.contains("network is unreachable") ||
+                msg.contains("network error")
+            ) {
+                return true
+            }
+            cur = cur.cause
+        }
+        return false
+    }
+
+    internal fun formatAiFailureMessage(e: Throwable, fallback: String): String {
+        if (!isOnline() || isNetworkException(e)) {
+            return "Keine Internetverbindung zu Google Gemini. Bitte Netzwerk prüfen und erneut versuchen."
+        }
+        val msg = e.localizedMessage.orEmpty()
+        if (msg.contains("403") || msg.contains("AppCheck", ignoreCase = true) || msg.contains("attestation", ignoreCase = true)) {
+            return "Firebase App Check / Zugriff abgelehnt (403). Bitte App neu starten oder Verbindung prüfen."
+        }
+        return msg.ifBlank { fallback }
+    }
+
     suspend fun sendAssistantMessage(
         userMessage: String,
         currentEqState: EqState,
@@ -211,31 +318,51 @@ class SoundTuningAiRepository {
         bluetoothSettings: BluetoothAudioSettings,
         presets: List<AudioPreset>
     ): Result<AiChatActionResult> {
+        if (!isOnline()) {
+            return Result.failure(
+                Exception("Keine Internetverbindung verfügbar. Bitte WLAN oder mobile Daten aktivieren.")
+            )
+        }
+        val contextualPrompt = buildContextualPrompt(
+            userMessage = userMessage,
+            state = currentEqState,
+            btState = bluetoothState,
+            btSettings = bluetoothSettings,
+            presets = presets
+        )
         return try {
             val chat = getOrCreateChat()
-            val contextualPrompt = buildContextualPrompt(
-                userMessage = userMessage,
-                state = currentEqState,
-                btState = bluetoothState,
-                btSettings = bluetoothSettings,
-                presets = presets
-            )
-
             val response = withTimeout(60_000L) {
                 chat.sendMessage(contextualPrompt)
             }
             val jsonText = response.text
                 ?: throw IllegalStateException("Keine Antwort erhalten.")
-            val parsed = parseAssistantActionJson(jsonText, currentEqState)
-            Result.success(parsed)
+            Result.success(parseAssistantActionJson(jsonText, currentEqState))
         } catch (e: TimeoutCancellationException) {
+            activeChat = null
             Log.e(TAG, "Gemini chat request timed out", e)
-            Result.failure(Exception("Zeitüberschreitung nach 60s."))
+            Result.failure(Exception("Zeitüberschreitung nach 60s. Bitte erneut versuchen."))
         } catch (e: CancellationException) {
             throw e
-        } catch (e: Exception) {
-            Log.e(TAG, "Gemini chat failed", e)
-            Result.failure(Exception(e.localizedMessage ?: "Gemini-Fehler."))
+        } catch (primaryErr: Exception) {
+            activeChat = null
+            Log.e(TAG, "Primary Gemini model failed (${primaryErr::class.simpleName}), checking fallback", primaryErr)
+            if (isNetworkException(primaryErr) || !isOnline()) {
+                return Result.failure(Exception(formatAiFailureMessage(primaryErr, "Netzwerkfehler bei Gemini.")))
+            }
+            try {
+                val fallbackResp = withTimeout(45_000L) {
+                    fallbackModel.generateContent(contextualPrompt)
+                }
+                val jsonText = fallbackResp.text
+                    ?: throw IllegalStateException("Keine Antwort vom Fallback-Modell erhalten.")
+                Result.success(parseAssistantActionJson(jsonText, currentEqState))
+            } catch (c: CancellationException) {
+                throw c
+            } catch (fallbackErr: Exception) {
+                Log.e(TAG, "Fallback Gemini model also failed", fallbackErr)
+                Result.failure(Exception(formatAiFailureMessage(primaryErr, "Gemini-Fehler.")))
+            }
         }
     }
 
@@ -246,16 +373,20 @@ class SoundTuningAiRepository {
         bluetoothSettings: BluetoothAudioSettings,
         presets: List<AudioPreset>
     ): Result<AiChatActionResult> {
+        if (!isOnline()) {
+            return Result.failure(
+                Exception("Keine Internetverbindung verfügbar. Bitte WLAN oder mobile Daten aktivieren.")
+            )
+        }
+        val contextualPrompt = buildContextualPrompt(
+            userMessage = "[VOICE_AUDIO] Höre die Sprachnachricht an, fasse den Wunsch in assistantReply kurz auf Deutsch zusammen und wende alle passenden DSP-Einstellungen direkt an.",
+            state = currentEqState,
+            btState = bluetoothState,
+            btSettings = bluetoothSettings,
+            presets = presets
+        )
         return try {
             val chat = getOrCreateChat()
-            val contextualPrompt = buildContextualPrompt(
-                userMessage = "[VOICE_AUDIO] Höre die Sprachnachricht an, fasse den Wunsch in assistantReply kurz auf Deutsch zusammen und wende alle passenden DSP-Einstellungen direkt an.",
-                state = currentEqState,
-                btState = bluetoothState,
-                btSettings = bluetoothSettings,
-                presets = presets
-            )
-
             val response = withTimeout(60_000L) {
                 chat.sendMessage(
                     content {
@@ -266,16 +397,37 @@ class SoundTuningAiRepository {
             }
             val jsonText = response.text
                 ?: throw IllegalStateException("Keine Antwort erhalten.")
-            val parsed = parseAssistantActionJson(jsonText, currentEqState)
-            Result.success(parsed)
+            Result.success(parseAssistantActionJson(jsonText, currentEqState))
         } catch (e: TimeoutCancellationException) {
+            activeChat = null
             Log.e(TAG, "Gemini voice request timed out", e)
-            Result.failure(Exception("Zeitüberschreitung nach 60s."))
+            Result.failure(Exception("Zeitüberschreitung nach 60s. Bitte erneut versuchen."))
         } catch (e: CancellationException) {
             throw e
-        } catch (e: Exception) {
-            Log.e(TAG, "Gemini voice failed", e)
-            Result.failure(Exception(e.localizedMessage ?: "Sprachbefehl fehlgeschlagen."))
+        } catch (primaryErr: Exception) {
+            activeChat = null
+            Log.e(TAG, "Primary Gemini voice model failed", primaryErr)
+            if (isNetworkException(primaryErr) || !isOnline()) {
+                return Result.failure(Exception(formatAiFailureMessage(primaryErr, "Netzwerkfehler bei Voice-KI.")))
+            }
+            try {
+                val fallbackResp = withTimeout(45_000L) {
+                    fallbackModel.generateContent(
+                        content {
+                            inlineData(wavBytes, "audio/wav")
+                            text(contextualPrompt)
+                        }
+                    )
+                }
+                val jsonText = fallbackResp.text
+                    ?: throw IllegalStateException("Keine Antwort erhalten.")
+                Result.success(parseAssistantActionJson(jsonText, currentEqState))
+            } catch (c: CancellationException) {
+                throw c
+            } catch (fallbackErr: Exception) {
+                Log.e(TAG, "Fallback Gemini voice failed", fallbackErr)
+                Result.failure(Exception(formatAiFailureMessage(primaryErr, "Sprachbefehl fehlgeschlagen.")))
+            }
         }
     }
 

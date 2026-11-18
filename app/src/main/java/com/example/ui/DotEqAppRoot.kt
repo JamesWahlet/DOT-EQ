@@ -36,8 +36,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CallSplit
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BluetoothConnected
 import androidx.compose.material.icons.filled.Equalizer
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
@@ -47,6 +49,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -65,9 +68,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.EqPreferencesRepository
+import com.example.i18n.LocalAppStrings
+import com.example.i18n.stringsFor
 import com.example.ui.components.BluetoothConnectionPopupDialog
 import com.example.ui.components.EssentialSpaceLogo
 import com.example.ui.components.NothingHardwarePowerSwitch
+import com.example.ui.components.PresetManagerDialog
+import com.example.ui.components.TopCreatePresetDialog
 import com.example.ui.screens.AiTunerScreen
 import com.example.ui.screens.CrossoverScreen
 import com.example.ui.screens.DynamicsScreen
@@ -76,6 +84,7 @@ import com.example.ui.screens.QrStudioSheet
 import com.example.ui.screens.SealDownloaderSheet
 import com.example.ui.screens.SettingsSheet
 import com.example.ui.theme.LocalNothingColors
+import com.example.ui.theme.contrastInkFor
 import com.example.ui.viewmodel.EqViewModel
 import com.example.ui.viewmodel.StudioTab
 import kotlinx.coroutines.launch
@@ -92,6 +101,7 @@ fun DotEqAppRoot(viewModel: EqViewModel) {
     val visualizerFrame by viewModel.visualizerFrame.collectAsStateWithLifecycle()
     val visualizerMode by viewModel.visualizerMode.collectAsStateWithLifecycle()
     val activeTab by viewModel.activeTab.collectAsStateWithLifecycle()
+    val customPresets by viewModel.customPresets.collectAsStateWithLifecycle()
     val presets by viewModel.allPresets.collectAsStateWithLifecycle()
     val chatMessages by viewModel.chatMessages.collectAsStateWithLifecycle()
     val isAiSending by viewModel.isAiSending.collectAsStateWithLifecycle()
@@ -104,6 +114,10 @@ fun DotEqAppRoot(viewModel: EqViewModel) {
     val bluetoothPopupDevice by viewModel.bluetoothPopupDevice.collectAsStateWithLifecycle()
     val voiceState by viewModel.voiceState.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+    val monochromeEnabled by viewModel.monochromeEnabled.collectAsStateWithLifecycle()
+    val appLanguage by viewModel.appLanguage.collectAsStateWithLifecycle()
+    val githubRepo by viewModel.githubRepo.collectAsStateWithLifecycle()
+    val updateState by viewModel.updateState.collectAsStateWithLifecycle()
     val routeNotice by viewModel.activeRouteNotice.collectAsStateWithLifecycle()
     val sealSettings by viewModel.sealSettings.collectAsStateWithLifecycle()
     val sealDownloads by viewModel.sealDownloads.collectAsStateWithLifecycle()
@@ -114,6 +128,8 @@ fun DotEqAppRoot(viewModel: EqViewModel) {
     var showQrStudio by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showSealStudio by remember { mutableStateOf(false) }
+    var showTopCreatePreset by remember { mutableStateOf(false) }
+    var showPresetManager by remember { mutableStateOf(false) }
 
     val audioPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -147,6 +163,7 @@ fun DotEqAppRoot(viewModel: EqViewModel) {
         }
     }
 
+    CompositionLocalProvider(LocalAppStrings provides stringsFor(appLanguage)) {
     Scaffold(
         containerColor = colors.canvas,
         contentWindowInsets = WindowInsets.safeDrawing,
@@ -182,9 +199,12 @@ fun DotEqAppRoot(viewModel: EqViewModel) {
                             .fillMaxSize()
                     ) {
                         DotEqTopBar(
+                            activePresetName = eqState.activePresetName,
                             masterEnabled = eqState.masterEnabled,
                             engineLabel = routeNotice ?: dspStatus.engineType.label,
                             isBluetoothConnected = bluetoothState.isBluetoothConnected,
+                            onCreateNewPreset = { showTopCreatePreset = true },
+                            onOpenPresetManager = { showPresetManager = true },
                             onToggleMaster = viewModel::toggleMasterEnabled,
                             onOpenSettings = {
                                 viewModel.refreshBluetoothDevices()
@@ -216,7 +236,7 @@ fun DotEqAppRoot(viewModel: EqViewModel) {
                                                 visualizerFrame = visualizerFrame,
                                                 visualizerMode = visualizerMode,
                                                 hasAudioPermission = hasAudioPermission,
-                                                presets = presets,
+                                                presets = EqPreferencesRepository.BUILT_IN_PRESETS,
                                                 onModeChange = viewModel::setEqMode,
                                                 onSimpleChange = viewModel::updateSimpleBands,
                                                 onExpertBandChange = viewModel::updateExpertBand,
@@ -229,13 +249,6 @@ fun DotEqAppRoot(viewModel: EqViewModel) {
                                                         snackbarHostState.showSnackbar("Preset '${preset.name}' aktiv")
                                                     }
                                                 },
-                                                onSavePreset = { name ->
-                                                    viewModel.saveCurrentAsPreset(name)
-                                                    scope.launch {
-                                                        snackbarHostState.showSnackbar("Preset gespeichert")
-                                                    }
-                                                },
-                                                onDeletePreset = viewModel::deleteCustomPreset,
                                                 onToggleSystemService = { enable ->
                                                     if (enable && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                                                         val notifGranted = ContextCompat.checkSelfPermission(
@@ -323,7 +336,8 @@ fun DotEqAppRoot(viewModel: EqViewModel) {
                                                         snackbarHostState.showSnackbar("Download gestartet: ${track.title}")
                                                     }
                                                 },
-                                                onOpenSealDownloader = { showSealStudio = true }
+                                                onOpenSealDownloader = { showSealStudio = true },
+                                                onRetryLastMessage = viewModel::retryLastAiMessage
                                             )
                                         }
                                     }
@@ -353,6 +367,13 @@ fun DotEqAppRoot(viewModel: EqViewModel) {
                     bluetoothSettings = bluetoothSettings,
                     presets = presets,
                     themeMode = themeMode,
+                    monochromeEnabled = monochromeEnabled,
+                    appLanguage = appLanguage,
+                    authUser = authUser,
+                    isAuthLoading = isAuthLoading,
+                    authError = authError,
+                    githubRepo = githubRepo,
+                    updateState = updateState,
                     activePresetName = eqState.activePresetName,
                     sealSettings = sealSettings,
                     sealDownloads = sealDownloads,
@@ -368,7 +389,13 @@ fun DotEqAppRoot(viewModel: EqViewModel) {
                     onAssignCurrentEqToDevice = viewModel::assignCurrentEqToBluetoothDevice,
                     onAssignPresetToDevice = viewModel::assignPresetToBluetoothDevice,
                     onRemoveDeviceRule = viewModel::removeBluetoothDeviceRule,
-                    onCycleThemeMode = viewModel::cycleThemeMode,
+                    onSelectThemeMode = viewModel::setThemeMode,
+                    onSetMonochromeEnabled = viewModel::setMonochromeEnabled,
+                    onSelectLanguage = viewModel::setAppLanguage,
+                    onSignInGoogle = { viewModel.signInWithGoogle(context) },
+                    onSignOutGoogle = { viewModel.signOutGoogle(context) },
+                    onCheckForUpdates = { viewModel.checkForUpdates() },
+                    onUpdateGithubRepo = viewModel::updateGithubRepo,
                     onShowMessage = { msg ->
                         scope.launch { snackbarHostState.showSnackbar(msg) }
                     },
@@ -452,15 +479,59 @@ fun DotEqAppRoot(viewModel: EqViewModel) {
                     onDismiss = viewModel::dismissBluetoothPopup
                 )
             }
+
+            if (showTopCreatePreset) {
+                TopCreatePresetDialog(
+                    eqState = eqState,
+                    onSavePreset = { name ->
+                        viewModel.saveCurrentAsPreset(name)
+                        scope.launch {
+                            snackbarHostState.showSnackbar("Preset gespeichert")
+                        }
+                    },
+                    onDismiss = { showTopCreatePreset = false }
+                )
+            }
+
+            if (showPresetManager) {
+                PresetManagerDialog(
+                    presets = customPresets,
+                    activePresetName = eqState.activePresetName,
+                    onSelectPreset = { preset ->
+                        viewModel.applyPreset(preset)
+                        scope.launch {
+                            snackbarHostState.showSnackbar("Preset '${preset.name}' aktiv")
+                        }
+                    },
+                    onUpdatePreset = { id, newName, overwrite ->
+                        viewModel.updatePreset(id, newName, overwrite)
+                        scope.launch {
+                            snackbarHostState.showSnackbar("Preset aktualisiert")
+                        }
+                    },
+                    onDeletePreset = { id ->
+                        viewModel.deleteCustomPreset(id)
+                        scope.launch {
+                            snackbarHostState.showSnackbar("Preset gelöscht")
+                        }
+                    },
+                    onCreateNew = { showTopCreatePreset = true },
+                    onDismiss = { showPresetManager = false }
+                )
+            }
         }
+    }
     }
 }
 
 @Composable
 private fun DotEqTopBar(
+    activePresetName: String,
     masterEnabled: Boolean,
     engineLabel: String,
     isBluetoothConnected: Boolean,
+    onCreateNewPreset: () -> Unit,
+    onOpenPresetManager: () -> Unit,
     onToggleMaster: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
@@ -469,35 +540,83 @@ private fun DotEqTopBar(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = "DOTEQ (01)",
-                style = MaterialTheme.typography.headlineSmall,
-                color = colors.inkPrimary,
-                maxLines = 1
-            )
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(colors.inkPrimary)
+                    .border(1.dp, colors.inkPrimary, CircleShape)
+                    .clickable { onCreateNewPreset() }
+                    .testTag("top_create_preset_button"),
+                contentAlignment = Alignment.Center
             ) {
-                if (isBluetoothConnected) {
+                Icon(
+                    imageVector = Icons.Filled.Add,
+                    contentDescription = "Neues Preset erstellen",
+                    tint = colors.pillActiveContent,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(colors.card)
+                    .border(1.dp, colors.cardBorder, RoundedCornerShape(24.dp))
+                    .clickable { onOpenPresetManager() }
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .testTag("top_preset_name_button"),
+                verticalArrangement = Arrangement.Center
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = activePresetName,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.inkPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
                     Icon(
-                        imageVector = Icons.Filled.BluetoothConnected,
-                        contentDescription = "Bluetooth Audio",
-                        tint = colors.blue,
-                        modifier = Modifier.size(13.dp)
+                        imageVector = Icons.Filled.KeyboardArrowDown,
+                        contentDescription = "Presets wechseln, ändern oder löschen",
+                        tint = colors.inkSecondary,
+                        modifier = Modifier.size(16.dp)
                     )
                 }
-                Text(
-                    text = engineLabel,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colors.inkSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (isBluetoothConnected) {
+                        Icon(
+                            imageVector = Icons.Filled.BluetoothConnected,
+                            contentDescription = "Bluetooth Audio",
+                            tint = colors.blue,
+                            modifier = Modifier.size(12.dp)
+                        )
+                    }
+                    Text(
+                        text = engineLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.inkSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
 
@@ -558,7 +677,7 @@ private fun NothingBottomDock(
             icon = Icons.Filled.Equalizer,
             selected = activeTab == StudioTab.EQ,
             tabColor = colors.red,
-            activeContentColor = Color.White,
+            activeContentColor = contrastInkFor(colors.red),
             onClick = { onSelectTab(StudioTab.EQ) },
             modifier = Modifier.weight(1f),
             testTag = "nav_eq"
@@ -568,7 +687,7 @@ private fun NothingBottomDock(
             icon = Icons.AutoMirrored.Filled.CallSplit,
             selected = activeTab == StudioTab.CROSSOVER,
             tabColor = colors.yellow,
-            activeContentColor = Color(0xFF15171A),
+            activeContentColor = contrastInkFor(colors.yellow),
             onClick = { onSelectTab(StudioTab.CROSSOVER) },
             modifier = Modifier.weight(1f),
             testTag = "nav_crossover"
@@ -578,7 +697,7 @@ private fun NothingBottomDock(
             icon = Icons.Filled.Tune,
             selected = activeTab == StudioTab.DYNAMICS,
             tabColor = colors.blue,
-            activeContentColor = Color.White,
+            activeContentColor = contrastInkFor(colors.blue),
             onClick = { onSelectTab(StudioTab.DYNAMICS) },
             modifier = Modifier.weight(1f),
             testTag = "nav_dynamics"
@@ -609,9 +728,9 @@ private fun NothingNavigationRail(
         verticalArrangement = Arrangement.spacedBy(10.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        DockTabItem("EQ", Icons.Filled.Equalizer, activeTab == StudioTab.EQ, colors.red, Color.White, { onSelectTab(StudioTab.EQ) }, Modifier.fillMaxWidth(), "nav_eq")
-        DockTabItem("X-OVER", Icons.AutoMirrored.Filled.CallSplit, activeTab == StudioTab.CROSSOVER, colors.yellow, Color(0xFF15171A), { onSelectTab(StudioTab.CROSSOVER) }, Modifier.fillMaxWidth(), "nav_crossover")
-        DockTabItem("DYN/BAL", Icons.Filled.Tune, activeTab == StudioTab.DYNAMICS, colors.blue, Color.White, { onSelectTab(StudioTab.DYNAMICS) }, Modifier.fillMaxWidth(), "nav_dynamics")
+        DockTabItem("EQ", Icons.Filled.Equalizer, activeTab == StudioTab.EQ, colors.red, contrastInkFor(colors.red), { onSelectTab(StudioTab.EQ) }, Modifier.fillMaxWidth(), "nav_eq")
+        DockTabItem("X-OVER", Icons.AutoMirrored.Filled.CallSplit, activeTab == StudioTab.CROSSOVER, colors.yellow, contrastInkFor(colors.yellow), { onSelectTab(StudioTab.CROSSOVER) }, Modifier.fillMaxWidth(), "nav_crossover")
+        DockTabItem("DYN/BAL", Icons.Filled.Tune, activeTab == StudioTab.DYNAMICS, colors.blue, contrastInkFor(colors.blue), { onSelectTab(StudioTab.DYNAMICS) }, Modifier.fillMaxWidth(), "nav_dynamics")
         DockAiTabItem(activeTab == StudioTab.AI, { onSelectTab(StudioTab.AI) }, Modifier.fillMaxWidth(), "nav_ai")
     }
 }
@@ -664,6 +783,7 @@ private fun DockAiTabItem(
     testTag: String
 ) {
     val colors = LocalNothingColors.current
+    val strings = LocalAppStrings.current
     Column(
         modifier = modifier
             .height(54.dp)
@@ -682,7 +802,7 @@ private fun DockAiTabItem(
         )
         Spacer(modifier = Modifier.height(2.dp))
         Text(
-            text = "KI",
+            text = strings.navAi,
             style = MaterialTheme.typography.labelSmall,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
             color = if (selected) colors.pillActiveContent else colors.inkSecondary,

@@ -35,13 +35,17 @@ data class SealDownloadOutcome(
     val resolvedFileName: String,
     val resolvedMediaUrl: String,
     val resolvedQualityLabel: String,
-    val bytesWritten: Long
+    val bytesWritten: Long,
+    val resolvedTitle: String = "",
+    val resolvedArtist: String = ""
 )
 
 class SealMediaRepository(
     private val context: Context,
     private val httpClient: OkHttpClient = defaultOkHttpClient()
 ) {
+    private val youTubeExtractor = YouTubeAudioExtractor(httpClient)
+
     suspend fun searchTracks(
         query: String,
         settings: SealSettings = SealSettings()
@@ -52,6 +56,31 @@ class SealMediaRepository(
         }
 
         try {
+            if (YouTubeAudioExtractor.isYouTubeUrl(cleanQuery)) {
+                val ytResult = youTubeExtractor.resolve(cleanQuery)
+                return@withContext ytResult.map { resolved ->
+                    val bestStream = YouTubeAudioExtractor.selectBestStream(resolved.streams, settings)
+                    listOf(
+                        SealTrackSuggestion(
+                            id = "yt_${resolved.videoId}",
+                            title = resolved.title,
+                            artist = resolved.author,
+                            sourceLabel = "YouTube · ${bestStream.extension.uppercase()}",
+                            shareUrl = resolved.watchUrl,
+                            downloadUrl = resolved.watchUrl,
+                            durationLabel = formatDurationMs(resolved.durationMs),
+                            suggestedFilename = formatTrackFilename(
+                                template = settings.filenameTemplate,
+                                artist = resolved.author,
+                                title = resolved.title,
+                                fallbackFromDisp = null,
+                                extension = bestStream.extension
+                            )
+                        )
+                    )
+                }
+            }
+
             val encoded = URLEncoder.encode(cleanQuery, "UTF-8")
             val (audiusResults, itunesResults) = coroutineScope {
                 val audiusDeferred = async {
@@ -97,6 +126,37 @@ class SealMediaRepository(
                 return@withContext Result.failure(IllegalArgumentException("Ungültige URL: $targetUrl"))
             }
 
+            // Dedicated YouTube extraction & multi-stream audio download
+            if (YouTubeAudioExtractor.isYouTubeUrl(targetUrl)) {
+                val ytResult = youTubeExtractor.resolve(targetUrl)
+                val resolved = ytResult.getOrElse { err ->
+                    return@withContext Result.failure(err)
+                }
+                val primaryStream = YouTubeAudioExtractor.selectBestStream(resolved.streams, settings)
+                val candidates = listOf(primaryStream) + resolved.streams.filter { it.url != primaryStream.url }
+                val finalTitle = resolved.title.ifBlank { preferredTitle }
+                val finalArtist = resolved.author.ifBlank { preferredArtist }
+
+                var lastFailure: Throwable? = null
+                for (stream in candidates.take(4)) {
+                    val dl = downloadDirectStream(
+                        streamUrl = stream.url,
+                        preferredTitle = finalTitle,
+                        preferredArtist = finalArtist,
+                        settings = settings,
+                        onProgress = onProgress,
+                        customUserAgent = stream.userAgent,
+                        referer = "https://www.youtube.com/",
+                        forcedExt = stream.extension
+                    )
+                    if (dl.isSuccess) return@withContext dl
+                    lastFailure = dl.exceptionOrNull()
+                }
+                return@withContext Result.failure(
+                    lastFailure ?: Exception("YouTube-Audio-Stream konnte nicht geladen werden.")
+                )
+            }
+
             val initialRequest = Request.Builder()
                 .url(targetUrl)
                 .header("User-Agent", "DotEQ-LinkDownloader/1.0 (Android)")
@@ -127,7 +187,7 @@ class SealMediaRepository(
                         )
                     } else {
                         return@withContext Result.failure(
-                            Exception("Webseite enthält keinen direkten Audio-Stream. Nutze die Song-Suche oder füge einen direkten Audio-Link ein.")
+                            Exception("Webseite enthält keinen direkten Audio-Stream. Nutze die Song-Suche oder füge einen YouTube- bzw. direkten Audio-Link ein.")
                         )
                     }
                 }
@@ -160,7 +220,9 @@ class SealMediaRepository(
                         resolvedFileName = fileName,
                         resolvedMediaUrl = targetUrl,
                         resolvedQualityLabel = qualityBadge,
-                        bytesWritten = savedUri.second
+                        bytesWritten = savedUri.second,
+                        resolvedTitle = preferredTitle,
+                        resolvedArtist = preferredArtist
                     )
                 )
             }
@@ -177,13 +239,19 @@ class SealMediaRepository(
         preferredTitle: String,
         preferredArtist: String,
         settings: SealSettings,
-        onProgress: (Long, Long) -> Unit
+        onProgress: (Long, Long) -> Unit,
+        customUserAgent: String = "DotEQ-LinkDownloader/1.0 (Android)",
+        referer: String? = null,
+        forcedExt: String? = null
     ): Result<SealDownloadOutcome> = withContext(Dispatchers.IO) {
-        val req = Request.Builder()
+        val reqBuilder = Request.Builder()
             .url(streamUrl)
-            .header("User-Agent", "DotEQ-LinkDownloader/1.0 (Android)")
-            .build()
-        httpClient.newCall(req).execute().use { response ->
+            .header("User-Agent", customUserAgent)
+        if (!referer.isNullOrBlank()) {
+            reqBuilder.header("Referer", referer)
+            reqBuilder.header("Origin", referer.trimEnd('/'))
+        }
+        httpClient.newCall(reqBuilder.build()).execute().use { response ->
             if (!response.isSuccessful) {
                 return@withContext Result.failure(Exception("Audio-Stream Fehler (HTTP ${response.code})."))
             }
@@ -193,7 +261,7 @@ class SealMediaRepository(
                 return@withContext Result.failure(Exception("Kein direkter Audio-Stream verfügbar."))
             }
             val totalBytes = body.contentLength()
-            val ext = resolveExtension(streamUrl, contentType, settings.format, settings.quality)
+            val ext = forcedExt ?: resolveExtension(streamUrl, contentType, settings.format, settings.quality)
             val fileName = formatTrackFilename(
                 template = settings.filenameTemplate,
                 artist = preferredArtist,
@@ -217,7 +285,9 @@ class SealMediaRepository(
                     resolvedFileName = fileName,
                     resolvedMediaUrl = streamUrl,
                     resolvedQualityLabel = qualityBadge,
-                    bytesWritten = bytes
+                    bytesWritten = bytes,
+                    resolvedTitle = preferredTitle,
+                    resolvedArtist = preferredArtist
                 )
             )
         }
@@ -563,19 +633,21 @@ class SealMediaRepository(
                 contentType.contains("flac") || url.contains(".flac", ignoreCase = true) -> "flac"
                 contentType.contains("wav") || url.contains(".wav", ignoreCase = true) -> "wav"
                 contentType.contains("mp4") || contentType.contains("aac") || url.contains(".m4a", ignoreCase = true) -> "m4a"
-                contentType.contains("ogg") || contentType.contains("opus") || url.contains(".ogg", ignoreCase = true) -> "ogg"
+                contentType.contains("ogg") || contentType.contains("opus") || contentType.contains("webm") || url.contains(".ogg", ignoreCase = true) -> "ogg"
                 contentType.contains("mpeg") || url.contains(".mp3", ignoreCase = true) -> "mp3"
                 else -> null
             }
 
-            // AUTO / ORIGINAL always pick the highest native format provided by the link
-            if (quality == SealAudioQuality.AUTO || preferred == SealAudioFormat.ORIGINAL) {
-                return detected ?: if (preferred != SealAudioFormat.ORIGINAL) preferred.extension else "m4a"
+            if (detected != null) {
+                return detected
             }
 
-            // LOSSLESS preserves lossless container from link or uses FLAC
+            if (quality == SealAudioQuality.AUTO || preferred == SealAudioFormat.ORIGINAL) {
+                return "m4a"
+            }
+
             if (quality == SealAudioQuality.LOSSLESS) {
-                return if (detected == "flac" || detected == "wav") detected else SealAudioFormat.FLAC.extension
+                return SealAudioFormat.FLAC.extension
             }
 
             return preferred.extension
@@ -587,19 +659,19 @@ class SealMediaRepository(
             preferred: SealAudioFormat,
             quality: SealAudioQuality
         ): String {
-            if (quality != SealAudioQuality.AUTO &&
-                quality != SealAudioQuality.LOSSLESS &&
-                preferred != SealAudioFormat.ORIGINAL
-            ) {
-                return preferred.mimeType
-            }
             return when (ext.lowercase()) {
                 "mp3" -> "audio/mpeg"
                 "m4a" -> "audio/mp4"
                 "flac" -> "audio/flac"
                 "ogg", "opus" -> "audio/ogg"
                 "wav" -> "audio/wav"
-                else -> serverMime.substringBefore(';').ifBlank { "audio/mp4" }
+                else -> serverMime.substringBefore(';').ifBlank {
+                    if (preferred != SealAudioFormat.ORIGINAL && quality != SealAudioQuality.AUTO) {
+                        preferred.mimeType
+                    } else {
+                        "audio/mp4"
+                    }
+                }
             }
         }
 
