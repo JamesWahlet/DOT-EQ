@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">DotEQ</string>
+    <string name="notification_channel_name">System Equalizer Service</string>
+    <string name="notification_channel_desc">Hält den systemweiten Equalizer, Crossover und Kompressor im Hintergrund aktiv.</string>
+    <string name="notification_title_active">DotEQ · System-DSP Aktiv</string>
+    <string name="notification_title_bypass">DotEQ · Bypass</string>
+    <string name="notification_action_toggle">Umschalten</string>
+    <string name="notification_action_stop">Beenden</string>
+</resources>

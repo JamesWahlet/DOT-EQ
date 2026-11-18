@@ -1,0 +1,6 @@
+{
+  "name": "DotEQ",
+  "description": "System-wide audio equalizer with crossover, compressor, balance, live visualizer, touch-interactive curves, and optional AI sound tuning.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
